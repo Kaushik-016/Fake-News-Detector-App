@@ -13,7 +13,7 @@ def clean_text(text):
     text = text.lower().strip()
     return text
 
-# -------------------- Language Detect + Translate --------------------
+# -------------------- Detect + Translate --------------------
 def detect_and_translate(text):
     try:
         lang = detect(text)
@@ -25,7 +25,6 @@ def detect_and_translate(text):
 
 # -------------------- URL to Text --------------------
 def extract_article(url):
-    # Try newspaper3k
     try:
         from newspaper import Article
         article = Article(url)
@@ -36,7 +35,6 @@ def extract_article(url):
     except:
         pass
 
-    # Fallback to BeautifulSoup
     try:
         html = requests.get(url, timeout=10).text
         soup = BeautifulSoup(html, "html.parser")
@@ -44,77 +42,69 @@ def extract_article(url):
     except:
         return ""
 
-# -------------------- Live News API --------------------
-NEWS_API_KEY = "YOUR_NEWS_API_KEY"  # add your key
+# -------------------- Live News Fetch --------------------
+NEWS_API_KEY = "YOUR_NEWS_API_KEY"
 
 def fetch_headlines():
     try:
         url = f"https://newsdata.io/api/1/news?apikey={NEWS_API_KEY}&country=in&language=en"
         res = requests.get(url).json()
-        return [n["title"] for n in res.get("results", [])]
+        return [a["title"] for a in res.get("results", [])]
     except:
         return []
 
-# -------------------- Load Models (Root Folder) --------------------
+# -------------------- Load Models (YOUR filenames) --------------------
 @st.cache_resource
-def load_all_models():
-    tfidf = joblib.load("tfidf_vectorizer.pkl")
-    lr = joblib.load("logistic_model.pkl")
-    gb = joblib.load("gb_model.pkl")
-    rf = joblib.load("rf_model.pkl")
-    return tfidf, lr, gb, rf
+def load_models():
+    tfidf = joblib.load("tfidfvect.pkl")   # ✅ matches your repo
+    model1 = joblib.load("model.pkl")      # ✅ main model
+    model2 = joblib.load("model2.pkl")     # ✅ second model
+    return tfidf, model1, model2
 
-tfidf, lr_model, gb_model, rf_model = load_all_models()
+tfidf, model1, model2 = load_models()
 
 # -------------------- Predict --------------------
 def predict_news(text):
     text = detect_and_translate(text)
     text = clean_text(text)
-    vector = tfidf.transform([text])
+    vec = tfidf.transform([text])
 
-    models = {
-        "Logistic Regression": lr_model,
-        "Gradient Boosting": gb_model,
-        "Random Forest": rf_model
+    predictions = {
+        "Model 1 (model.pkl)": "Real" if model1.predict(vec)[0] == 0 else "Fake",
+        "Model 2 (model2.pkl)": "Real" if model2.predict(vec)[0] == 0 else "Fake"
     }
 
-    votes = {name: ("Real" if m.predict(vector)[0] == 0 else "Fake") for name, m in models.items()}
-    final_result = max(set(votes.values()), key=list(votes.values()).count)
-
-    return final_result, votes
+    final = max(set(predictions.values()), key=list(predictions.values()).count)
+    return final, predictions
 
 # -------------------- Streamlit UI --------------------
 st.set_page_config(page_title="NewsTruth AI", layout="wide")
-st.title("📰 NewsTruth AI — Fake News Detection")
+st.title("📰 NewsTruth AI — Fake News Detector")
 
-mode = st.sidebar.radio("Choose Input Type", ["Text Input", "URL Input", "Live News"])
+mode = st.sidebar.radio("Select Input Type", ["Text Input", "URL Input", "Live News"])
 
-# Text Input
 if mode == "Text Input":
-    text = st.text_area("Enter text or headline:")
+    text = st.text_area("Enter News Text")
     if st.button("Analyze"):
         result, votes = predict_news(text)
         st.success(f"Prediction: **{result}**")
+        st.write("Votes:")
         st.json(votes)
 
-# URL Input
 elif mode == "URL Input":
-    url = st.text_input("Paste news article URL:")
+    url = st.text_input("Enter article URL")
     if st.button("Analyze URL"):
         with st.spinner("Extracting article..."):
             article = extract_article(url)
-        st.write(article[:1000] + "...")
+        st.write(article[:1500] + "...")
         result, votes = predict_news(article)
         st.success(f"Prediction: **{result}**")
         st.json(votes)
 
-# Live News
 elif mode == "Live News":
-    if st.button("Fetch Headlines"):
+    if st.button("Fetch Live Headlines"):
         headlines = fetch_headlines()
-        if not headlines:
-            st.warning("No news fetched. Check API key.")
-        for idx, h in enumerate(headlines):
-            st.write(f"### {idx+1}. {h}")
+        for i, h in enumerate(headlines):
+            st.write(f"### {i+1}. {h}")
             result, votes = predict_news(h)
             st.info(f"Prediction: **{result}**")
