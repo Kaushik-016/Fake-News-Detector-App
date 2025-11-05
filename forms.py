@@ -12,5 +12,3 @@ class NewsForm(FlaskForm):
                          validators=[Optional(), Length(min=5, message="Text must be at least 5 characters long.")])
 
     check_submit = SubmitField('Check Credibility')
-    
-    # fetch_live_news button is handled by an <a> tag in HTML now

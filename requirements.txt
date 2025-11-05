@@ -6,7 +6,6 @@ joblib
 nltk
 requests
 gunicorn
-# Specific versions for compatibility:
-lxml[html_clean]
+lxml
 goose3
 Flask-WTF
