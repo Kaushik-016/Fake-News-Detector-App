@@ -1,32 +1,70 @@
 import streamlit as st
 import joblib
-import pandas as pd
+import re
+import requests
+from bs4 import BeautifulSoup
+from newspaper import Article
+from langdetect import detect
+from deep_translator import GoogleTranslator
 
-# Utility imports from your project
-from utils.text_cleaner import clean_text
-from utils.news_api_handler import extract_article_from_url, fetch_latest_headlines
-from utils.language_handler import detect_and_translate_to_en
+# -------------------- Text Cleaning --------------------
+def clean_text(text):
+    text = re.sub(r"http\S+|www\S+|https\S+", "", text)
+    text = re.sub(r"[^A-Za-z0-9\s]", "", text)
+    text = text.lower().strip()
+    return text
 
-# Load models
+# -------------------- Language Detection + Translation --------------------
+def detect_and_translate(text):
+    try:
+        lang = detect(text)
+        if lang != "en":
+            return GoogleTranslator(source='auto', target='en').translate(text)
+        return text
+    except:
+        return text
+
+# -------------------- Extract Text From URL --------------------
+def extract_article(url):
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        return article.text
+    except:
+        try:
+            html = requests.get(url).text
+            soup = BeautifulSoup(html, "html.parser")
+            return soup.get_text()
+        except:
+            return ""
+
+# -------------------- Fetch Live News Headlines --------------------
+NEWS_API_KEY = "YOUR_NEWS_API_KEY"   # ✅ Replace with your key
+def fetch_headlines():
+    try:
+        url = f"https://newsdata.io/api/1/news?apikey={NEWS_API_KEY}&country=in&language=en&category=top"
+        res = requests.get(url).json()
+        return [article["title"] for article in res.get("results", [])]
+    except:
+        return []
+
+# -------------------- Load ML Models --------------------
 @st.cache_resource
-def load_models():
+def load_all_models():
     tfidf = joblib.load("models/tfidf_vectorizer.pkl")
     lr = joblib.load("models/logistic_model.pkl")
     gb = joblib.load("models/gb_model.pkl")
     rf = joblib.load("models/rf_model.pkl")
     return tfidf, lr, gb, rf
 
-tfidf, lr_model, gb_model, rf_model = load_models()
+tfidf, lr_model, gb_model, rf_model = load_all_models()
 
+# -------------------- Prediction Function --------------------
 def predict_news(text):
-    """Preprocess text → Translate → Predict → Ensemble"""
-    if not text or text.strip() == "":
-        return "No input provided", {}
-
-    # Preprocessing
-    translated = detect_and_translate_to_en(text)
-    cleaned = clean_text(translated)
-    X = tfidf.transform([cleaned])
+    text = detect_and_translate(text)
+    text = clean_text(text)
+    X = tfidf.transform([text])
 
     models = {
         "Logistic Regression": lr_model,
@@ -34,71 +72,43 @@ def predict_news(text):
         "Random Forest": rf_model
     }
 
-    votes = {}
-    for name, model in models.items():
-        preds = model.predict(X)[0]
-        votes[name] = "Real" if preds == 0 else "Fake"
+    votes = {name: ("Real" if model.predict(X)[0] == 0 else "Fake") 
+             for name, model in models.items()}
 
-    # Ensemble
-    majority_vote = max(set(votes.values()), key=list(votes.values()).count)
+    final = max(set(votes.values()), key=list(votes.values()).count)
+    return final, votes
 
-    return majority_vote, votes
-
-
-# -------------------------------- UI -------------------------------- #
-
+# -------------------- UI --------------------
 st.set_page_config(page_title="NewsTruth AI", layout="wide")
-st.title("📰 NewsTruth AI — Fake News Detection using AI")
+st.title("📰 NewsTruth AI — Fake News Detector")
 
-st.sidebar.title("Input Options")
-choice = st.sidebar.radio("Choose input type:",
-                          ["Text Input", "URL Input", "Live News"])
+option = st.sidebar.radio("Select Input Type", ["Text", "URL", "Live News"])
 
-# ---------------- TEXT INPUT ----------------
-if choice == "Text Input":
-    st.subheader("Paste News Text / Headline")
-    text = st.text_area("Enter text here:", height=180)
-
-    if st.button("🔍 Analyze News"):
+# -------- Text Input --------
+if option == "Text":
+    text = st.text_area("Enter News Text or Headline")
+    if st.button("Analyze News"):
         result, votes = predict_news(text)
-        st.success(f"✅ Prediction: **{result}**")
-        st.write("### 🔎 Model Votes")
+        st.success(f"Prediction: **{result}**")
         st.json(votes)
 
-# ---------------- URL INPUT ----------------
-elif choice == "URL Input":
-    st.subheader("Paste a News URL")
-    url = st.text_input("Enter URL:")
+# -------- URL Input --------
+elif option == "URL":
+    url = st.text_input("Enter News Article URL")
+    if st.button("Analyze URL"):
+        with st.spinner("Extracting article text..."):
+            article = extract_article(url)
+        st.write("### Extracted Text:")
+        st.write(article[:1500] + "...") if len(article) > 1500 else st.write(article)
+        result, votes = predict_news(article)
+        st.success(f"Prediction: **{result}**")
+        st.json(votes)
 
-    if st.button("🌐 Fetch & Analyze Article"):
-        with st.spinner("Extracting article..."):
-            article = extract_article_from_url(url)
-
-        if article:
-            st.write("### ✅ Extracted Text")
-            st.write(article)
-
-            result, votes = predict_news(article)
-            st.success(f"✅ Prediction: **{result}**")
-            st.write("### 🔎 Model Votes")
-            st.json(votes)
-        else:
-            st.error("❌ Could not extract content from the URL.")
-
-# ---------------- LIVE NEWS ----------------
-elif choice == "Live News":
-    st.subheader("🗞 Latest Headlines (API)")
-    if st.button("📡 Fetch Live Headlines"):
-        headlines = fetch_latest_headlines()
-
-        if headlines:
-            for i, news in enumerate(headlines):
-                st.write(f"### 📰 {i+1}. {news}")
-
-                result, votes = predict_news(news)
-                st.info(f"Prediction: **{result}**")
-        else:
-            st.warning("⚠ Unable to fetch live news. Check API key or network.")
-
-st.markdown("---")
-st.caption("Built by NewsTruth AI | Fake News Detection Using Hybrid ML + NLP")
+# -------- Live News --------
+elif option == "Live News":
+    if st.button("Fetch Live Headlines"):
+        headlines = fetch_headlines()
+        for i, h in enumerate(headlines):
+            st.write(f"### {i+1}. {h}")
+            result, votes = predict_news(h)
+            st.info(f"Prediction: **{result}**")
